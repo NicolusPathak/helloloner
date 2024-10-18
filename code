@@ -1,0 +1,217 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Send, Moon, Sun, Trash2, Smile } from 'lucide-react';
+import { EmojiClickData, EmojiTheme } from 'emoji-picker-react';
+
+const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
+
+// Types
+interface Message {
+  id: number;
+  text: string;
+  sender: 'user' | 'friend';
+}
+
+interface Theme {
+  cardBg: string;
+  cardHeaderBg: string;
+  messageBgUser: string;
+  messageBgFriend: string;
+  inputBg: string;
+  inputText: string;
+}
+
+// Constants
+const THEMES: Record<string, Theme> = {
+  light: {
+    cardBg: 'bg-gradient-to-b from-white to-gray-50',
+    cardHeaderBg: 'bg-white',
+    messageBgUser: 'bg-blue-500 text-white',
+    messageBgFriend: 'bg-white border border-gray-100 text-gray-800',
+    inputBg: 'bg-white',
+    inputText: 'text-gray-800',
+  },
+  dark: {
+    cardBg: 'bg-gradient-to-b from-gray-900 to-gray-800',
+    cardHeaderBg: 'bg-gray-900',
+    messageBgUser: 'bg-blue-700 text-white',
+    messageBgFriend: 'bg-gray-800 border border-gray-700 text-gray-200',
+    inputBg: 'bg-gray-800',
+    inputText: 'text-gray-200',
+  },
+};
+
+const CARE_MESSAGES = [
+  "Hey! How are you doing today?",
+  "Good morning! ☀️ Have a wonderful day!",
+  "You are amazing! Don't forget to take care of yourself.",
+  "Stay hydrated! Self-care is important!",
+  "Sending positive vibes your way! ✨",
+];
+
+const MAX_MESSAGES = 50;
+const TYPING_DELAY = 1500;
+
+// Custom hooks
+const useLocalStorage = <T,>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>] => {
+  const [storedValue, setStoredValue] = useState<T>(() => {
+    if (typeof window === 'undefined') {
+      return initialValue;
+    }
+    try {
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.error(`Error reading localStorage key "${key}":`, error);
+      return initialValue;
+    }
+  });
+
+  const setValue: React.Dispatch<React.SetStateAction<T>> = useCallback((value) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      setStoredValue(valueToStore);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(key, JSON.stringify(valueToStore));
+      }
+    } catch (error) {
+      console.error(`Error setting localStorage key "${key}":`, error);
+    }
+  }, [key, storedValue]);
+
+  return [storedValue, setValue];
+};
+
+// MessageBubble Component
+const MessageBubble: React.FC<{ message: Message; currentTheme: Theme; onDelete: (id: number) => void }> = React.memo(({ message, currentTheme, onDelete }) => (
+  <div className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
+    <div className={`max-w-[70%] p-3 rounded-lg ${message.sender === 'user' ? currentTheme.messageBgUser : currentTheme.messageBgFriend}`}>
+      {message.text}
+      {message.sender === 'user' && (
+        <Button variant="ghost" size="icon" className="ml-2" onClick={() => onDelete(message.id)} aria-label="Delete message">
+          <Trash2 size={16} />
+        </Button>
+      )}
+    </div>
+  </div>
+));
+
+MessageBubble.displayName = 'MessageBubble';
+
+const ChatInput: React.FC<{ 
+  userInput: string; 
+  setUserInput: React.Dispatch<React.SetStateAction<string>>; 
+  sendMessage: (file?: File) => void; 
+  setIsTyping: React.Dispatch<React.SetStateAction<boolean>>; 
+  currentTheme: Theme 
+}> = React.memo(({ userInput, setUserInput, sendMessage, setIsTyping, currentTheme }) => {
+  const [showPicker, setShowPicker] = useState(false);
+  const [fileName, setFileName] = useState<string | null>(null);
+
+  const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setFileName(file.name);
+      sendMessage(file);
+      setUserInput('');
+    }
+  }, [sendMessage, setUserInput]);
+
+  const onEmojiClick = useCallback((emojiData: EmojiClickData) => {
+    setUserInput(prev => prev + emojiData.emoji);
+  }, [setUserInput]);
+
+  const handleTyping = useCallback(() => {
+    setIsTyping(true);
+    const typingTimer = setTimeout(() => setIsTyping(false), 1000);
+    return () => clearTimeout(typingTimer);
+  }, [setIsTyping]);
+
+  useEffect(() => {
+    const cleanup = handleTyping();
+    return cleanup;
+  }, [userInput, handleTyping]);
+
+  return (
+    <div className="flex w-full items-center">
+      <input type="file" id="file-upload" className="hidden" onChange={handleFileChange} />
+      <label htmlFor="file-upload" className="cursor-pointer mr-2">
+        <Button variant="outline" size="icon" aria-label="Upload file">
+          📎
+        </Button>
+      </label>
+      {fileName && <span className="mr-2">{fileName}</span>}
+      <Button variant="outline" size="icon" onClick={() => setShowPicker(!showPicker)} aria-label="Pick an emoji">
+        <Smile />
+      </Button>
+      {showPicker && (
+        <div className="absolute bottom-full mb-2">
+          <EmojiPicker onEmojiClick={onEmojiClick} theme={currentTheme === THEMES.dark ? EmojiTheme.DARK : EmojiTheme.LIGHT} />
+        </div>
+      )}
+      <input
+        type="text"
+        value={userInput}
+        onChange={(e) => setUserInput(e.target.value)}
+        onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendMessage())}
+        placeholder="Type a message..."
+        className={`flex-grow mx-2 p-2 rounded border ${currentTheme.inputBg} ${currentTheme.inputText}`}
+        aria-label="Message input"
+      />
+      <Button onClick={() => sendMessage()} aria-label="Send message">
+        <Send size={20} />
+      </Button>
+    </div>
+  );
+});
+
+ChatInput.displayName = 'ChatInput';
+
+// Main component
+const FriendlyChat: React.FC = () => {
+  const [messages, setMessages] = useLocalStorage<Message[]>('chatMessages', []);
+  const [userInput, setUserInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [theme, setTheme] = useLocalStorage<keyof typeof THEMES>('theme', 'light');
+  const currentTheme = useMemo(() => THEMES[theme], [theme]);
+
+  useEffect(() => {
+    document.body.className = theme === 'dark' ? 'dark' : 'light';
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
+  }, [setTheme]);
+
+  const sendMessage = useCallback((file?: File) => {
+    if (userInput.trim() || file) {
+      const newMessage: Message = { id: Date.now(), text: file ? `File: ${file.name}` : userInput, sender: 'user' };
+      setMessages(prev => [...prev.slice(-MAX_MESSAGES + 1), newMessage]);
+      setUserInput('');
+      setIsTyping(true);
+
+      setTimeout(() => {
+        const friendMessage: Message = {
+          id: Date.now() + 1,
+          text: CARE_MESSAGES[Math.floor(Math.random() * CARE_MESSAGES.length)],
+          sender: 'friend',
+        };
+        setMessages(prev => [...prev.slice(-MAX_MESSAGES + 1), friendMessage]);
+        setIsTyping(false);
+      }, TYPING_DELAY);
+    }
+  }, [userInput, setMessages]);
+
+  const deleteMessage = useCallback((id: number) => {
+    setMessages(prev => prev.filter(msg => msg.id !== id));
+  }, [setMessages]);
+
+  return (
+    <Card className={`w-full max-w-md mx-auto ${currentTheme.cardBg}`}>
+      <CardHeader className={currentTheme.cardHeaderBg}>
+        <CardTitle className="flex justify-between items-center">
+          <span>Friendly Chat</span>
+          <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}>
+            {theme
